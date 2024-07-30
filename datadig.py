@@ -21,14 +21,26 @@ service = Service('C:/Users/dewan/data scrapping/datadig/chromedriver.exe')
 driver = webdriver.Chrome(service=service, options=chrome_options)
 
 def fetch_video_data(keyword):
-    request = youtube.search().list(
-        q=keyword,
-        part='snippet',
-        type='video',
-        maxResults=1000
-    )
-    response = request.execute()
-    return response['items']
+    videos = []
+    next_page_token = None
+    
+    while True:
+        request = youtube.search().list(
+            q=keyword,
+            part='snippet',
+            type='video',
+            maxResults=50,  # Maximum per request
+            pageToken=next_page_token
+        )
+        response = request.execute()
+        
+        videos.extend(response['items'])
+        
+        next_page_token = response.get('nextPageToken')
+        if not next_page_token or len(videos) >= 500:
+            break
+    
+    return videos
 
 def fetch_channel_info(channel_id):
     request = youtube.channels().list(
