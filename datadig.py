@@ -1,98 +1,115 @@
 from googleapiclient.discovery import build
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
 from bs4 import BeautifulSoup
-import requests
-import openpyxl
-import json
+import pandas as pd
 
-# Set your YouTube API key
-api_key = 'AIzaSyBCrt49j0ilELtPmu-COGfvk0ha_R7ui7Q'
+# Your YouTube API key
+YOUTUBE_API_KEY = 'AIzaSyBCrt49j0ilELtPmu-COGfvk0ha_R7ui7Q'
 
-# Initialize YouTube API client
-youtube = build('youtube', 'v3', developerKey=api_key)
+# Setup YouTube API client
+youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
 
-# Search for videos based on a keyword
-def search_videos(keyword, max_results=20):
+# Setup Selenium WebDriver
+chrome_options = Options()
+chrome_options.add_argument("--headless")  # Run in headless mode
+service = Service('C:/Users/dewan/data scrapping/datadig/chromedriver.exe')
+driver = webdriver.Chrome(service=service, options=chrome_options)
+
+def fetch_video_data(keyword):
     request = youtube.search().list(
         q=keyword,
-        part="snippet",
-        type="video",
-        maxResults=max_results
+        part='snippet',
+        type='video',
+        maxResults=1000
     )
     response = request.execute()
-    return response.get('items', [])
+    return response['items']
 
-# Get channel details including email and social media links
-def get_channel_details(channel_id):
+def fetch_channel_info(channel_id):
     request = youtube.channels().list(
-        part="snippet,contentDetails,statistics",
+        part='snippet,contentDetails,statistics',
         id=channel_id
     )
     response = request.execute()
-    return response.get('items', [])
-
-# Fetch additional information from the web if not available on YouTube
-def fetch_additional_info(channel_url):
-    response = requests.get(channel_url)
-    soup = BeautifulSoup(response.content, 'html.parser')
-    # Example: Extract email and social media links (needs customization)
+    channel_info = response['items'][0]
     return {
-        'email': 'example@example.com',  # Placeholder example
-        'facebook': 'https://facebook.com/example',  # Placeholder example
-        # Add other fields as needed
+        'title': channel_info['snippet']['title'],
+        'subscriber_count': channel_info['statistics'].get('subscriberCount', 'N/A')
     }
 
-# Save data in Excel format
-def save_to_excel(data, filename='output.xlsx'):
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.append(['Video Title', 'Channel Name', 'Email', 'Facebook', 'Instagram', 'WhatsApp'])
-    for item in data:
-        ws.append([
-            item['video_title'], 
-            item['channel_name'], 
-            item['email'], 
-            item['facebook'], 
-            item['instagram'], 
-            item['whatsapp']
-        ])
-    wb.save(filename)
+def fetch_additional_info(channel_url):
+    try:
+        driver.get(channel_url)
+        
+        # Wait for the "About" section to be fully loaded
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, 'ytd-channel-about-metadata-renderer'))
+        )
+        
+        soup = BeautifulSoup(driver.page_source, 'html.parser')
+        
+        # Extract email
+        email_element = soup.find('a', href=lambda href: href and 'mailto:' in href)
+        email = email_element.get('href', '').replace('mailto:', '') if email_element else 'N/A'
+        
+        # Extract social media links
+        facebook_element = soup.find('a', href=lambda href: 'facebook.com' in href)
+        facebook = facebook_element.get('href', 'N/A') if facebook_element else 'N/A'
+        
+        instagram_element = soup.find('a', href=lambda href: 'instagram.com' in href)
+        instagram = instagram_element.get('href', 'N/A') if instagram_element else 'N/A'
+        
+        return {
+            'email': email,
+            'facebook': facebook,
+            'instagram': instagram,
+        }
+    except Exception as e:
+        print(f"Error fetching additional info: {e}")
+        return {
+            'email': 'N/A',
+            'facebook': 'N/A',
+            'instagram': 'N/A',
+        }
 
-# Save data in JSON format
-def save_to_json(data, filename='output.json'):
-    with open(filename, 'w') as f:
-        json.dump(data, f, indent=4)
-
-# Main function to run the scraper
-def main():
-    keyword = 'gaming'  # Example keyword
-    videos = search_videos(keyword)
-
-    data = []
-    for video in videos:
+def main(keyword):
+    video_data = fetch_video_data(keyword)
+    
+    results = []
+    
+    for video in video_data:
+        video_id = video['id']['videoId']
         video_title = video['snippet']['title']
         channel_id = video['snippet']['channelId']
-        channel_title = video['snippet']['channelTitle']
-
-        # Get channel details from YouTube
-        channel_details = get_channel_details(channel_id)
-        if channel_details:
-            channel_info = channel_details[0]
-            channel_url = f"https://www.youtube.com/channel/{channel_id}"
-            additional_info = fetch_additional_info(channel_url)
-            
-            data.append({
-                'video_title': video_title,
-                'channel_name': channel_title,
-                'email': additional_info.get('email', 'N/A'),
-                'facebook': additional_info.get('facebook', 'N/A'),
-                'instagram': additional_info.get('instagram', 'N/A'),
-                'whatsapp': additional_info.get('whatsapp', 'N/A'),
-            })
+        channel_info = fetch_channel_info(channel_id)
+        channel_url = f"https://www.youtube.com/channel/{channel_id}"
+        additional_info = fetch_additional_info(channel_url)
+        
+        results.append({
+            'video_id': video_id,
+            'video_title': video_title,
+            'channel_id': channel_id,
+            'channel_title': channel_info['title'],
+            'subscriber_count': channel_info['subscriber_count'],
+            'channel_url': channel_url,
+            'email': additional_info['email'],
+            'facebook': additional_info['facebook'],
+            'instagram': additional_info['instagram'],
+        })
     
-    # Save the collected data in the desired format
-    save_to_excel(data)
-    save_to_json(data)
+    # Save results to Excel
+    df = pd.DataFrame(results)
+    df.to_excel('youtube_data.xlsx', index=False)
+    
+    # Save results to JSON
+    df.to_json('youtube_data.json', orient='records')
 
-# Entry point of the script
 if __name__ == "__main__":
-    main()
+    keyword = input("Enter a keyword to search on YouTube: ")
+    main(keyword)
+    driver.quit()
